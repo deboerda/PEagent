@@ -1,4 +1,6 @@
-click>=8.1,<9
-fastmcp>=2,<3
-pydantic>=2.7,<3
-requests>=2.31,<3
+# PEagent — MCP / CLI / SDK 运行依赖（Windows, Python 3.11+）
+click>=8.1
+fastmcp>=0.4
+pydantic>=2.5
+requests>=2.31
+pywin32>=306

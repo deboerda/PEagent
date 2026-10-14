@@ -60,7 +60,8 @@ def _discover_port() -> int | None:
     for path in _PORT_FILE_PATHS:
         if path.exists():
             try:
-                return int(path.read_text().strip())
+                # 端口文件由引擎以 ANSI/GBK 写入，errors 忽略避免 UnicodeDecodeError
+                return int(path.read_text(encoding="utf-8", errors="ignore").strip())
             except (ValueError, OSError):
                 pass
 
@@ -84,7 +85,7 @@ def _is_pe_running() -> bool:
         import subprocess
         result = subprocess.run(
             ["tasklist", "/fi", "imagename eq PostEngineer*.exe", "/nh"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, encoding="utf-8", errors="ignore", timeout=5,
         )
         return "PostEngineer.exe" in result.stdout or "PostEngineerd.exe" in result.stdout
     except Exception:
@@ -417,6 +418,48 @@ def set_scene_effect(effect_name: str, data: dict[str, Any]) -> dict:
 
     result = effect_apply(reg["domain"], reg["engine_effect_name"], "", changes or {})
     return _normalize_pe_result(result, resolved, "")
+
+
+def get_effect(effect_name: str, domain: str = "", target: str = "") -> dict:
+    """按域查询效果状态（scene_effect / node_effect / appearance 通用）。
+
+    node_effect / appearance 域必须提供 target（节点路径）。
+    """
+    from .resolver import resolve_capability
+    resolved = resolve_capability(effect_name)
+    if not resolved:
+        return {"success": False, "error": f"未知 PE capability: {effect_name}"}
+
+    reg = PE_REGISTRY[resolved]
+    use_domain = domain or reg["domain"]
+    if use_domain in ("node_effect", "appearance") and not target:
+        return {"success": False,
+                "error": f"{use_domain} 域需要提供 target（节点路径）"}
+
+    result = effect_query(use_domain, reg["engine_effect_name"], target)
+    return _normalize_pe_result(result, resolved, target)
+
+
+def set_effect(effect_name: str, data: dict[str, Any], domain: str = "",
+               target: str = "") -> dict:
+    """按域设置效果（partial update）。node_effect / appearance 需提供 target。"""
+    from .resolver import resolve_capability, validate_partial
+    resolved = resolve_capability(effect_name)
+    if not resolved:
+        return {"success": False, "error": f"未知 PE capability: {effect_name}"}
+
+    reg = PE_REGISTRY[resolved]
+    use_domain = domain or reg["domain"]
+    if use_domain in ("node_effect", "appearance") and not target:
+        return {"success": False,
+                "error": f"{use_domain} 域需要提供 target（节点路径）"}
+
+    changes, validation_error = validate_partial(reg["set_model"], data)
+    if validation_error:
+        return validation_error
+
+    result = effect_apply(use_domain, reg["engine_effect_name"], target, changes or {})
+    return _normalize_pe_result(result, resolved, target)
 
 
 def capture_frame(label: str = "") -> dict:

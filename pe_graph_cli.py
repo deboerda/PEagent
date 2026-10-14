@@ -152,8 +152,6 @@ def mutate(args: argparse.Namespace, operation: str) -> None:
     elif operation == "link":
         if args.from_id not in nodes or args.to_id not in nodes:
             fail("link endpoint node id not found")
-        if args.from_id == 1 or args.to_id == 1:
-            fail("node id 1 is the invisible native graph root; create a boot node and link from that node")
         if any(l["from"] == args.from_id and l["to"] == args.to_id for l in data.get("links", [])):
             fail("link already exists")
         data.setdefault("links", []).append({"from": args.from_id, "to": args.to_id})

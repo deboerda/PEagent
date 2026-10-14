@@ -61,6 +61,17 @@ from .client import (
     _post_json,
 )
 from .native_flow import native_script_flow
+from .script_project import prepare_project_script, render_script
+from .script_bridge import (
+    run_script as bridge_run_script,
+    camera_get,
+    node_set_position,
+    node_move,
+    node_set_rotation_reset,
+    scene_children_dsl,
+)
+from . import native_pipe
+from . import peo_index
 from .registry import (
     OBJECT_REGISTRY,
     PE_REGISTRY,

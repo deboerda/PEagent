@@ -351,3 +351,70 @@ graph register
 - 版本化 RVA 适配器；
 - MCP action 与 CLI 参数的统一 schema。
 
+## P0 commands (v0.21)
+
+```bash
+# Change PROGRAM text by node id (duplicate-safe)
+python pe_cli.py graph update-text-id path\to\file.rg 11 "agent_ok();主页面初始状态();"
+
+# Discover BOOT→… startup chain (read-only)
+python pe_cli.py graph boot-chain path\to\行为图_main.rg
+
+# e2e recipe (PE open, MCP on 8080; does NOT call /api/graph/*)
+$env:PE_MCP_PORT="8080"
+python tools/rg_e2e_recipe.py --marker agent_e2e_ok --wait 25
+```
+
+Redline unchanged: never call live HTTP `/api/graph/read|node/create` on a 3D session.
+
+## P2 commands (v0.23) — project .rg Insight index
+
+Offline only. Discovers `main/**/*.rg` + peproj registrations; never mutates `.rg`.
+
+```bash
+# Build Insight-style JSON index for a PE project
+python pe_cli.py graph index path\to\project --out data\exports\rg_index\proj.json
+
+# Substring search (Unicode / Chinese safe); reuse index with --index
+python pe_cli.py graph grep path\to\project "主页面初始状态"
+python pe_cli.py graph grep path\to\project helloworld --index data\exports\rg_index\mvp_rg_index.json
+
+# One-shot index + grep
+python pe_cli.py graph index path\to\project --grep agent_gdz23_e2e --out data\exports\rg_index\proj.json
+```
+
+MCP: `pe_graph_index` / `pe_graph_grep`.
+
+Index fields per graph: path, size, node_count, link_count, type_histogram, programs/includes, boot_chain summary, node id→type/text stubs.
+
+
+## P1 commands (v0.22) — proprietary field writes
+
+```bash
+# VARIABLE InitialValue (32B blob at prop +20..+51)
+python pe_cli.py graph set-var path\to\file.rg <id> 0x12345678 --encoding int
+python pe_cli.py graph inspect-prop path\to\file.rg <id>
+# TIMER condition = common text
+python pe_cli.py graph set-timer path\to\file.rg <id> "delay(2.5)"
+```
+
+## P3 commands (v0.25) — native hot reload (no graph editor)
+
+```bash
+# After offline edits, reload .rg into the running editor without opening the graph UI
+python pe_cli.py graph reload-native --path E:\PEagent\PeProject\MVP\main\helloworld.rg
+# or by registered name/filename
+python pe_cli.py graph reload-native --name helloworld.rg
+python pe_cli.py graph reload-native --filename helloworld.rg
+```
+
+Native pipe protocol:
+
+```text
+cmd=rg_reload|path=<abs.rg>|name=helloworld.rg
+# aliases: graph_reload; also filename=
+```
+
+Implementation: `PEAgentNative` → `CRelationGraph::BuildGraph` (RVA `0xB1C0`).  
+**Do not** use live HTTP `/api/graph/read|node/create` (opens editor, stalls tick).  
+See `docs/rg-p3-blocker.md` (UNBLOCKED) and `data/exports/rg_native_reload/`.

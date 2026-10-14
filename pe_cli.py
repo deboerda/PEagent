@@ -14,6 +14,9 @@
   pe create button -d '{"name":"btn1","text":"点击"}'
   pe effect set ao -d '{"enabled":true}'
   pe screenshot          # 截图
+  pe obj-delete 按钮_1 --type button   # 稳定删除 UI/MVO 对象
+  pe var-delete TEST     # 删除已创建的变量并验证 still_present=0
+  pe chart-delete 图表_1 # 安全删除图表（仅 DeleteUIObject tree=2）
   pe toggle ao on|off    # 快捷开关
   pe --no-daemon status  # 绕过 daemon，直接模式
 """
@@ -445,6 +448,129 @@ def output(limit):
         _print_result(result)
 
 
+# ── 脚本桥 ────────────────────────────────────────────────
+
+@cli.command()
+@click.option("--vport", "-v", default="main", show_default=True, help="视口名称")
+def camera(vport):
+    """读取视口相机参数（eye/target/up）"""
+    pe = _get_client()
+    _print_result(pe.camera_get(vport))
+
+
+@cli.command("run")
+@click.argument("script_file", type=click.Path(exists=True))
+@click.option("--name", default="cli", help="脚本名（用于回传文件命名）")
+@click.option("--wait", default=8.0, show_default=True, help="等待回传文件秒数")
+def run(script_file, name, wait):
+    """通过脚本桥执行 DSL 函数体文件并回传结果。
+
+    文件内容为函数体语句（不含 void fn(){} 包装），__OUT__ 占位回传路径。
+    数值输出必须经 valuesToString 转字符串；禁止 char* 出参的 Vs* 函数。
+    运行时错误请用 `pe console` 查看 PE 底部控制台。
+    """
+    pe = _get_client()
+    with open(script_file, encoding="utf-8") as f:
+        body = f.read()
+    _print_result(pe.bridge_run_script(body, name=name, wait=wait))
+
+
+# ── 场景树（原生管道） ────────────────────────────────────
+
+@cli.command("scene-children")
+@click.option("--module", "-m", default="", help="模块名，默认 main")
+@click.option("--cap", "-c", default=32, show_default=True, help="枚举上限")
+def scene_children(module, cap):
+    """单层枚举模块模型根的子节点名（DSL 通路，可能含垃圾占位尾部）"""
+    pe = _get_client()
+    _print_result(pe.scene_children_dsl(module, cap=cap))
+
+
+@cli.command("field")
+@click.argument("action", type=click.Choice(["info", "key", "create", "rename", "flush", "delete", "scene-key"]))
+@click.option("--key", "-k", default="", help="节点 i64 key（十进制）")
+@click.option("--path", "-p", default="", help="节点路径（info/key/delete 动作）")
+@click.option("--name", "-n", default="", help="节点名（create/rename 动作）")
+@click.option("--father", default="", help="父节点 key（create 动作，留空挂模块模型根）")
+def field(action, key, path, name, father):
+    """原生场景树操作（PEAgentNative 管道通路）"""
+    from pe_client import native_pipe
+    if action == "scene-key":
+        result = native_pipe.scene_key()
+    elif action == "info":
+        result = native_pipe.field_info(key)
+    elif action == "key":
+        result = native_pipe.field_key(path)
+    elif action == "create":
+        result = native_pipe.field_create(name, father=father)
+    elif action == "rename":
+        result = native_pipe.field_rename(key, name)
+    elif action == "delete":
+        result = native_pipe.field_delete(path)
+    else:
+        result = native_pipe.field_flush(key)
+    _print_result(result)
+
+
+# ── 视图与诊断 ────────────────────────────────────────────
+
+@cli.command("obj-delete")
+@click.argument("name")
+@click.option("--type", "obj_type", default="button", show_default=True, help="MVO 类型：button/image/text/var/curve/chart/...。图表自动使用安全 tree=2。")
+@click.option("--field-path", default="", help="可选场景字段路径；图表类型不会执行 field_delete。")
+@click.option("--tree", type=click.Choice(["auto", "0", "1", "2"]), default="auto", show_default=True, help="删除策略；推荐 auto。图表 auto 强制 tree=2。")
+def obj_delete_cmd(name, obj_type, field_path, tree):
+    """稳定删除 PE 工程树中的 UI/MVO 对象，并返回 still_present 验证结果。"""
+    from pe_client import native_pipe
+    tree_arg = None if tree == "auto" else tree
+    result = native_pipe.obj_delete(name=name, obj_type=obj_type, field_path=field_path, tree=tree_arg)
+    if result.get("success") and result.get("still_present") == "0":
+        _print_result(result, f"对象 {name!r} 删除成功（still_present=0）")
+    else:
+        _print_result(result)
+
+
+@cli.command("var-delete")
+@click.argument("name")
+def var_delete_cmd(name):
+    """删除已创建的变量（例如：pe var-delete TEST）。"""
+    from pe_client import native_pipe
+    result = native_pipe.obj_delete(name=name, obj_type="var")
+    if result.get("success") and result.get("still_present") == "0":
+        _print_result(result, f"变量 {name!r} 删除成功（still_present=0）")
+    else:
+        _print_result(result)
+
+
+@cli.command("chart-delete")
+@click.argument("name")
+@click.option("--field-path", default="", help="仅用于记录对象路径；不会执行不安全的 field_delete。")
+def chart_delete_cmd(name, field_path):
+    """安全删除图表/曲线：只执行一次 DeleteUIObject(tree=2)。"""
+    from pe_client import native_pipe
+    result = native_pipe.obj_delete(name=name, obj_type="curve", field_path=field_path, tree=2)
+    if result.get("success") and result.get("still_present") == "0":
+        _print_result(result, f"图表 {name!r} 删除成功（tree=2，still_present=0）")
+    else:
+        _print_result(result)
+
+
+@cli.command()
+@click.option("--name", "-n", default="snap", help="截图命名")
+def snapshot(name):
+    """抓取 PE 主窗口完整画面（PrintWindow 全窗截图）"""
+    from pe_client import scene_tools
+    _print_result(scene_tools.snapshot(name))
+
+
+@cli.command("camera-apply")
+@click.argument("camera_name")
+def camera_apply(camera_name):
+    """切换到工程中指定名称的相机（applyCamera 机制）"""
+    from pe_client import scene_tools
+    _print_result(scene_tools.apply_camera(camera_name))
+
+
 @cli.command("console")
 @click.option("--limit", "-n", default=0, type=click.IntRange(min=0), help="返回最近 N 条，0 表示全部")
 @click.option(
@@ -500,6 +626,47 @@ def ui_inspect():
 @cli.group()
 def script():
     """PE 脚本绑定、启动和输出验证。"""
+
+
+@script.command("prepare")
+@click.option("--project", required=True, type=click.Path(exists=True, path_type=str),
+              help="PE 项目目录或 .peproj 文件")
+@click.option("--function", "function_name", required=True, help="要创建的 PE 函数名")
+@click.option("--script-name", default="", help="脚本文件名；默认使用函数名.script")
+@click.option("--message", default="", help="默认生成 outputMessage 的内容")
+@click.option("--body-file", default=None, type=click.Path(exists=True, dir_okay=False, path_type=str),
+              help="函数体文件；只填写函数语句，不要包含 Script{}")
+@click.option("--include-file", default="", type=click.Path(dir_okay=False, path_type=str),
+              help="include.script；默认是项目 main\\Script\\include.script")
+@click.option("--script-file", default="", type=click.Path(dir_okay=False, path_type=str),
+              help="脚本输出路径；默认是项目 main\\Script\\<function>.script")
+@click.option("--overwrite", is_flag=True, help="允许替换同名但内容不同的脚本文件")
+@click.option("--dry-run", is_flag=True, help="只检查并显示计划，不写入文件")
+def script_prepare(project, function_name, script_name, message, body_file,
+                   include_file, script_file, overwrite, dry_run):
+    """创建功能 .script，并幂等维护 include.script。"""
+    from pe_client import prepare_project_script
+
+    body = ""
+    if body_file:
+        try:
+            body = Path(body_file).read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            body = Path(body_file).read_text(encoding="gb18030")
+    result = prepare_project_script(
+        project=project,
+        function_name=function_name,
+        script_name=script_name,
+        message=message,
+        body=body,
+        include_file=include_file,
+        script_file=script_file,
+        overwrite=overwrite,
+        dry_run=dry_run,
+    )
+    click.echo(json.dumps(result, ensure_ascii=False, indent=2))
+    if not result.get("success"):
+        raise click.ClickException(result.get("error", "script preparation failed"))
 
 
 @script.command("deploy-and-run")
@@ -1022,6 +1189,393 @@ def pe_template(capability, operation):
 # ======================================================================
 # 入口
 # ======================================================================
+
+
+
+@cli.command('anim-list')
+@click.option('--query', '-q', default='', help='substring filter')
+def anim_list(query):
+    from pe_client.rotate_model import list_anims
+    _print_result(list_anims(query=query))
+
+
+@cli.command('anim-inspect')
+@click.argument('name')
+def anim_inspect(name):
+    from pe_client.rotate_model import inspect_anim
+    _print_result(inspect_anim(name))
+
+
+@cli.command('anim-play')
+@click.argument('name')
+def anim_play(name):
+    from pe_client.rotate_model import play_anim
+    _print_result(play_anim(name))
+
+
+@cli.command('rotate')
+@click.option('--field', '-f', default='', help='model field path')
+@click.option('--degrees', '-d', default=360.0, type=float)
+@click.option('--duration', default=5.0, type=float, help='seconds')
+@click.option('--axis', default='0,1,0', help='x,y,z')
+@click.option('--anim', 'anim_name', default='', help='preset anim name')
+@click.option('--mode', default='auto', type=click.Choice(['auto', 'play', 'create']))
+def rotate(field, degrees, duration, axis, anim_name, mode):
+    from pe_client.rotate_model import rotate_model
+    parts = [float(x) for x in axis.split(',')]
+    while len(parts) < 3:
+        parts.append(0.0)
+    _print_result(rotate_model(field=field, degrees=degrees, duration_s=duration, axis=parts[:3], anim_name=anim_name, mode=mode))
+
+
+
+
+@cli.group("graph")
+def graph_grp():
+    """Behavior graph CRUD (offline-first; avoids live graph-editor stall)."""
+    pass
+
+
+@graph_grp.command("caps")
+def graph_caps():
+    from pe_client import rg_crud
+    _print_result(rg_crud.capabilities())
+
+
+@graph_grp.command("list")
+@click.option("--project", required=True, type=click.Path(exists=True))
+def graph_list(project):
+    from pe_client import rg_crud
+    _print_result(rg_crud.list_graphs(project))
+
+
+@graph_grp.command("read")
+@click.argument("rg_path", type=click.Path(exists=True))
+@click.option("--no-inspect", is_flag=True)
+def graph_read_cmd(rg_path, no_inspect):
+    from pe_client import rg_crud
+    _print_result(rg_crud.read_graph(rg_path, with_inspect=not no_inspect))
+
+
+@graph_grp.command("query")
+@click.argument("rg_path", type=click.Path(exists=True))
+@click.option("--type", "type_name", default="")
+@click.option("--id", "node_id", default=None, type=int)
+def graph_query_cmd(rg_path, type_name, node_id):
+    from pe_client import rg_crud
+    _print_result(rg_crud.query_graph(rg_path, type_name=type_name, node_id=node_id))
+
+
+@graph_grp.command("create")
+@click.option("--project", required=True, type=click.Path(exists=True))
+@click.option("--name", required=True)
+@click.option("--call", multiple=True)
+@click.option("--include", default="main\\Script\\include.script")
+@click.option("--overwrite", is_flag=True)
+def graph_create_cmd(project, name, call, include, overwrite):
+    from pe_client import rg_crud
+    _print_result(rg_crud.create_graph(project, name, calls=list(call) or None, include=include, overwrite=overwrite))
+
+
+@graph_grp.command("update-text")
+@click.argument("rg_path", type=click.Path(exists=True))
+@click.option("--old", required=True)
+@click.option("--new", "new_text", required=True)
+def graph_update_text_cmd(rg_path, old, new_text):
+    from pe_client import rg_crud
+    _print_result(rg_crud.update_graph_text(rg_path, old_text=old, new_text=new_text))
+
+
+@graph_grp.command("delete")
+@click.option("--project", required=True, type=click.Path(exists=True))
+@click.option("--name", required=True)
+@click.option("--keep-file", is_flag=True)
+def graph_delete_cmd(project, name, keep_file):
+    from pe_client import rg_crud
+    _print_result(rg_crud.delete_graph(project, name, delete_file=not keep_file))
+
+
+@graph_grp.command("add-program")
+@click.argument("rg_path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+@click.argument("text")
+@click.option("--x", default=520.0, show_default=True)
+@click.option("--y", default=220.0, show_default=True)
+@click.option("--link-from", "link_from_id", default=0, show_default=True, help="Optional source node id to link from.")
+@click.option("--out", "out_path", default="", help="Write to another path instead of inplace.")
+def graph_add_program_cmd(rg_path, text, x, y, link_from_id, out_path):
+    """Add a PROGRAM node offline via RelaGraph native WriteToBuffer."""
+    from pe_client import rg_crud
+    _print_result(rg_crud.add_program(
+        rg_path, text, x=x, y=y, link_from_id=link_from_id,
+        out_path=out_path or None, inplace=not out_path,
+    ))
+
+
+@graph_grp.command("remove-node")
+@click.argument("rg_path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+@click.argument("node_id", type=int)
+@click.option("--out", "out_path", default="", help="Write to another path instead of inplace.")
+def graph_remove_node_cmd(rg_path, node_id, out_path):
+    """Remove a node by id offline via RelaGraph native WriteToBuffer."""
+    from pe_client import rg_crud
+    _print_result(rg_crud.remove_node(
+        rg_path, node_id, out_path=out_path or None, inplace=not out_path,
+    ))
+
+
+@graph_grp.command("add-type")
+@click.argument("rg_path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+@click.argument("node_type", type=int)
+@click.option("--text", default="", help="Optional node text (PROGRAM/SCRIPT/COMMENT/...).")
+@click.option("--x", default=520.0, show_default=True)
+@click.option("--y", default=220.0, show_default=True)
+@click.option("--link-from", "link_from_id", default=0, show_default=True)
+@click.option("--out", "out_path", default="", help="Write to another path instead of inplace.")
+def graph_add_type_cmd(rg_path, node_type, text, x, y, link_from_id, out_path):
+    """Add a node of given RgType offline via CreateByType + WriteToBuffer."""
+    from pe_client import rg_crud
+    _print_result(rg_crud.add_node(
+        rg_path, node_type, text=text, x=x, y=y, link_from_id=link_from_id,
+        out_path=out_path or None, inplace=not out_path,
+    ))
+
+
+@graph_grp.command("link")
+@click.argument("rg_path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+@click.argument("from_id", type=int)
+@click.argument("to_id", type=int)
+@click.option("--out", "out_path", default="", help="Write to another path instead of inplace.")
+def graph_link_cmd(rg_path, from_id, to_id, out_path):
+    """Create an offline CURVE edge between two node ids."""
+    from pe_client import rg_crud
+    _print_result(rg_crud.link_nodes(
+        rg_path, from_id, to_id, out_path=out_path or None, inplace=not out_path,
+    ))
+
+@graph_grp.command("unlink")
+@click.argument("rg_path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+@click.argument("from_id", type=int)
+@click.argument("to_id", type=int)
+@click.option("--out", "out_path", default="")
+def graph_unlink_cmd(rg_path, from_id, to_id, out_path):
+    """Remove an offline CURVE edge between two node ids."""
+    from pe_client import rg_crud
+    _print_result(rg_crud.unlink_nodes(
+        rg_path, from_id, to_id, out_path=out_path or None, inplace=not out_path,
+    ))
+
+
+@graph_grp.command("update-text-id")
+@click.argument("rg_path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+@click.argument("node_id", type=int)
+@click.argument("new_text")
+@click.option("--out", "out_path", default="", help="Optional output .rg; default inplace.")
+def graph_update_text_id_cmd(rg_path, node_id, new_text, out_path):
+    """Change PROGRAM/node text by node id (safe with duplicate strings)."""
+    from pe_client import rg_crud
+    _print_result(rg_crud.update_graph_text_by_id(
+        rg_path, node_id, new_text, out_path=out_path or None, inplace=not out_path,
+    ))
+
+
+@graph_grp.command("boot-chain")
+@click.argument("rg_path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+@click.option("--no-hub-curves", is_flag=True, help="Skip listing HUB outgoing CURVE edges.")
+def graph_boot_chain_cmd(rg_path, no_hub_curves):
+    """Follow BOOT.next startup chain; note HUB CURVE fan-out."""
+    from pe_client import rg_crud
+    _print_result(rg_crud.boot_chain(rg_path, include_curves_from_hub=not no_hub_curves))
+
+
+
+@graph_grp.command("set-var")
+@click.argument("rg_path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+@click.argument("node_id", type=int)
+@click.argument("value", type=str)
+@click.option("--encoding", default="auto", show_default=True,
+              help="auto|int|float|hex|raw|zeros — how to pack the 32B InitialValue blob")
+@click.option("--out", "out_path", default=None, type=click.Path(dir_okay=False, path_type=str))
+def graph_set_var(rg_path, node_id, value, encoding, out_path):
+    """Write VARIABLE InitialValue blob (prop+20..+51) offline."""
+    from pe_client import rg_crud
+    v = value
+    try:
+        if encoding in ("int", "i32", "uint", "u32"):
+            v = int(value, 0)
+        elif encoding in ("float", "f32", "double", "f64"):
+            v = float(value)
+        elif encoding == "auto":
+            if "." in value and not all(c in "0123456789abcdefABCDEF. " for c in value):
+                v = value
+            elif "." in value:
+                v = float(value)
+            else:
+                # prefer int; long hex without 0x stays string for hex path inside encode auto
+                try:
+                    v = int(value, 0)
+                except ValueError:
+                    v = value
+    except ValueError:
+        v = value
+    _print_result(rg_crud.set_variable_value(
+        rg_path, node_id, v, encoding=encoding, out_path=out_path, inplace=out_path is None,
+    ))
+
+
+@graph_grp.command("inspect-prop")
+@click.argument("rg_path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+@click.argument("node_id", type=int)
+def graph_inspect_prop(rg_path, node_id):
+    """Decode proprietary tail for a node id (offline)."""
+    from pe_client import rg_crud
+    _print_result(rg_crud.inspect_prop_tail(rg_path, node_id))
+
+
+@graph_grp.command("set-timer")
+@click.argument("rg_path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+@click.argument("node_id", type=int)
+@click.argument("condition", type=str)
+@click.option("--out", "out_path", default=None, type=click.Path(dir_okay=False, path_type=str))
+def graph_set_timer(rg_path, node_id, condition, out_path):
+    """Set TIMER condition/expression via common text (update_text_by_id)."""
+    from pe_client import rg_crud
+    _print_result(rg_crud.set_timer_condition(
+        rg_path, node_id, condition, out_path=out_path, inplace=out_path is None,
+    ))
+
+
+
+
+@graph_grp.command("index")
+@click.argument("project", type=click.Path(exists=True, path_type=str))
+@click.option("--out", "out_path", default="", help="Write JSON index to this path.")
+@click.option("--no-inspect", is_flag=True, help="Parse-only (skip RelaGraph inspect).")
+@click.option("--no-boot-chain", is_flag=True, help="Skip boot_chain summary per graph.")
+@click.option("--include-backups", is_flag=True, help="Include backup/ .rg files.")
+@click.option("--grep", "grep_q", default="", help="Optional substring search after indexing.")
+def graph_index_cmd(project, out_path, no_inspect, no_boot_chain, include_backups, grep_q):
+    """Offline Insight-style index of all .rg under a PE project (read-only)."""
+    from pe_client import rg_crud
+    _print_result(rg_crud.index_project(
+        project,
+        with_inspect=not no_inspect,
+        with_boot_chain=not no_boot_chain,
+        include_backups=include_backups,
+        out_path=out_path or None,
+        grep=grep_q or None,
+    ))
+
+
+@graph_grp.command("grep")
+@click.argument("project", type=click.Path(exists=True, path_type=str))
+@click.argument("substr")
+@click.option("--index", "index_path", default="", help="Reuse an existing JSON index file.")
+@click.option("--no-inspect", is_flag=True, help="When building index: parse-only.")
+@click.option("--out", "out_path", default="", help="Optional path to save freshly built index.")
+def graph_grep_cmd(project, substr, index_path, no_inspect, out_path):
+    """Search project .rg index for substring in node/program/boot texts (Unicode-safe)."""
+    from pe_client import rg_crud
+    if index_path:
+        _print_result(rg_crud.search_index(index_path, substr))
+    else:
+        idx = rg_crud.index_project(
+            project,
+            with_inspect=not no_inspect,
+            with_boot_chain=True,
+            out_path=out_path or None,
+            grep=substr,
+        )
+        # Prefer compact grep result but keep index meta
+        gre = idx.get("grep") or {}
+        gre["index_graph_count"] = idx.get("graph_count")
+        gre["project"] = idx.get("project")
+        if idx.get("out_path"):
+            gre["index_out_path"] = idx["out_path"]
+        _print_result(gre)
+
+
+
+@cli.group("peo")
+def peo_grp():
+    """Offline PE-Insight .peo index (read-only; no live graph HTTP)."""
+    pass
+
+
+@peo_grp.command("info")
+@click.argument("peo_path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+def peo_info_cmd(peo_path):
+    """Summarize .peo size + classified string counts (no full dump)."""
+    from pe_client import peo_index
+    _print_result(peo_index.info(peo_path))
+
+
+@peo_grp.command("grep")
+@click.argument("peo_or_index", type=click.Path(exists=True, dir_okay=False, path_type=str))
+@click.argument("substr")
+@click.option("--limit", default=50, show_default=True)
+@click.option("--ignore-case/--no-ignore-case", "ignore_case", default=True)
+def peo_grep_cmd(peo_or_index, substr, limit, ignore_case):
+    """Grep length-prefixed GBK strings inside a .peo or a JSON index."""
+    from pe_client import peo_index
+    _print_result(peo_index.grep(peo_or_index, substr, ignore_case=ignore_case, limit=limit))
+
+
+@peo_grp.command("index")
+@click.argument("peo_path", type=click.Path(exists=True, dir_okay=False, path_type=str))
+@click.option("--out", "out_path", default="", help="Write JSON under data/exports/peo_index/ by default.")
+def peo_index_cmd(peo_path, out_path):
+    """Build full offline .peo string index JSON (PE-Insight first slice)."""
+    from pe_client import peo_index
+    out = out_path or str(peo_index.default_export_path(peo_path))
+    result = peo_index.index_peo(peo_path, out_path=out)
+    compact = {k: result[k] for k in result if k not in ("strings", "tagged_sample")}
+    _print_result(compact)
+
+
+
+@graph_grp.command("reload-native")
+@click.option("--path", default="", help="Absolute .rg path")
+@click.option("--filename", default="", help="Registered filename or leaf .rg name")
+@click.option("--name", default="", help="GraphInfo name (e.g. helloworld.rg)")
+@click.option("--json-out", "json_out", is_flag=True, default=False)
+def graph_reload_native(path, filename, name, json_out):
+    """Native pipe rg_reload: BuildGraph from disk without opening graph editor."""
+    from pe_client.native_pipe import rg_reload
+    from pe_client import engine_status
+    import json as _json
+    before = None
+    try:
+        before = engine_status()
+    except Exception as e:
+        before = {"success": False, "error": str(e)}
+    result = rg_reload(path=path, filename=filename, name=name)
+    after = None
+    try:
+        after = engine_status()
+    except Exception as e:
+        after = {"success": False, "error": str(e)}
+    out = {
+        "success": bool(result.get("success")),
+        "reload": result,
+        "tick_before": {
+            "tick_alive": (before or {}).get("tick_alive"),
+            "last_tick_age_ms": (before or {}).get("last_tick_age_ms"),
+        },
+        "tick_after": {
+            "tick_alive": (after or {}).get("tick_alive"),
+            "last_tick_age_ms": (after or {}).get("last_tick_age_ms"),
+        },
+    }
+    if json_out:
+        click.echo(_json.dumps(out, ensure_ascii=False, indent=2))
+    else:
+        ok = out["success"]
+        click.echo(("OK " if ok else "ERR ") + str(result))
+        click.echo(f"tick_before alive={out['tick_before']['tick_alive']} age={out['tick_before']['last_tick_age_ms']}")
+        click.echo(f"tick_after  alive={out['tick_after']['tick_alive']} age={out['tick_after']['last_tick_age_ms']}")
+    if not out["success"]:
+        raise SystemExit(1)
+
 
 if __name__ == "__main__":
     cli()
