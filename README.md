@@ -1,5 +1,7 @@
 # PEagent — PostEngineer (PE) 三维引擎 AI 开发助手工具链
 
+> 公开定位：面向本地三维仿真引擎（类 Unity 工作流）的开源 MCP / CLI / SDK 工具链，用于场景对象操作、脚本、行为图编排等。不包含引擎本体或客户工程。
+
 让 AI Agent（MCP 客户端 / 命令行 / Python 程序）全栈操控本机运行的 **PostEngineer (PE) 三维引擎**：对象查询与增删改、场景效果、脚本执行、场景树字段、截图与控制台、调试启停、行为图（.rg）离线编排与原生热重载。
 
 > 版本 v0.26（2026-09-17）｜ 完整现状与验证矩阵见 [docs/PEagent-开发现状完整报告.md](docs/PEagent-开发现状完整报告.md)（42 项能力 39 项验证通过）
@@ -24,7 +26,7 @@ PEagentUpload/
 └── tests/                  ← 契约测试示例
 ```
 
-**不含**：PostEngineer 本体、PE SDK、PE 运行时 DLL（RelaGraph.dll / ProjectMgr.plu 等）、License、用户工程文件。`tools/rg_native_mutate.exe`（离线改节点的原生工具）为可选件，未随包分发。
+**不含**：PostEngineer / PE 引擎本体、官方 SDK、运行时插件与 License、用户工程文件。`tools/rg_native_mutate.exe`（离线改节点的原生工具）为可选件，未随包分发。
 
 ## 总体架构
 
@@ -126,7 +128,7 @@ pip install -r requirements.txt
 | native-api-index-v0.md | 原生 API 索引 |
 | benchmark-vs-tuanjie-cowork.md | 与 Tuanjie Cowork 的对标分析 |
 | INTEGRATION_GUIDE.md | PEHelloMCP 新增脚本执行路由的集成指南 |
-| pevsbridge-readme.md | VS2017 加密源码读写桥（PEVsBridge VSIX） |
+| pevsbridge-readme.md | VS2017 源码读写桥接扩展（PEVsBridge VSIX，可选） |
 
 ## 使用红线（违反 = 崩溃/挂起，均实测）
 
